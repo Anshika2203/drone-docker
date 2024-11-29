@@ -319,6 +319,22 @@ func main() {
 			EnvVar: "PLUGIN_REGISTRY_TYPE",
 		},
 		cli.StringFlag{
+			Name:   "local-image-path",
+			Usage:  "Local Image Path",
+			EnvVar: "PLUGIN_LOCAL_IMAGE_PATH",
+		},
+		cli.StringFlag{
+			Name:   "local-image-store",
+			Usage:  "Local Image Store",
+			EnvVar: "PLUGIN_LOCAL_IMAGE_STORE",
+		},
+		cli.BoolFlag{
+			Name:   "local-image-reuse",
+			Usage:  "LocalImageReuse",
+			EnvVar: "PLUGIN_LOCAL_IMAGE_REUSE",
+		},
+
+		cli.StringFlag{
 			Name:   "access-token",
 			Usage:  "access token",
 			EnvVar: "ACCESS_TOKEN",
@@ -398,6 +414,9 @@ func run(c *cli.Context) error {
 		BaseImageRegistry: c.String("docker.baseimageregistry"),
 		BaseImageUsername: c.String("docker.baseimageusername"),
 		BaseImagePassword: c.String("docker.baseimagepassword"),
+		LocalImagePath:    c.String("local-image-path"),
+		LocalImageStore:   c.String("local-image-store"),
+		LocalImageReuse:   c.Bool("local-image-reuse"),
 	}
 
 	if c.Bool("tags.auto") {
