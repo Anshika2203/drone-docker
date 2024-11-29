@@ -88,6 +88,9 @@ type (
 		BaseImageRegistry string // Docker registry to pull base image
 		BaseImageUsername string // Docker registry username to pull base image
 		BaseImagePassword string // Docker registry password to pull base image
+		LocalImagePath    string // New field to store the local image path
+		LocalImageStore   string // Path where local image info will be stored
+		LocalImageReuse   bool   // Flag to indicate if we want to reuse a local image
 	}
 
 	Card []struct {
@@ -252,6 +255,37 @@ func (p Plugin) Exec() error {
 		if !p.Dryrun {
 			cmds = append(cmds, commandPush(p.Build, tag)) // docker push
 		}
+	}
+
+	if p.Dryrun && p.LocalImageReuse {
+		storePath := "/tmp/local_docker_image_path.txt"
+		if p.LocalImageStore != "" {
+			storePath = p.LocalImageStore
+		}
+
+		if err := os.MkdirAll(filepath.Dir(storePath), 0755); err != nil {
+			fmt.Printf("Could not create directory for local image path: %v\n", err)
+			return err
+		}
+
+		err := os.WriteFile(storePath, []byte(p.Build.TempTag), 0644)
+		if err != nil {
+			fmt.Printf("Could not write local image path: %v\n", err)
+			return err
+		}
+		fmt.Printf("Local image path stored at: %s\n", storePath)
+	}
+
+	if p.LocalImagePath != "" {
+		// Read the local image path from the file
+		content, err := os.ReadFile(p.LocalImagePath)
+		if err != nil {
+			return fmt.Errorf("could not read local image path: %v", err)
+		}
+		p.Build.TempTag = string(content)
+
+		// Skip build step, use the existing image
+		fmt.Printf("Reusing local image: %s\n", p.Build.TempTag)
 	}
 
 	// execute all commands in batch mode.
