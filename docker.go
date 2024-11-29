@@ -74,6 +74,7 @@ type (
 		Platform            string   // Docker build platform
 		SSHAgentKey         string   // Docker build ssh agent key
 		SSHKeyPath          string   // Docker build ssh key path
+		TarPath             string   // Set this flag to save the image as a tarball at path
 	}
 
 	// Plugin defines the Docker plugin parameters.
@@ -88,6 +89,7 @@ type (
 		BaseImageRegistry string // Docker registry to pull base image
 		BaseImageUsername string // Docker registry username to pull base image
 		BaseImagePassword string // Docker registry password to pull base image
+		LocalTarballPath  string // Path to local tarball to push
 	}
 
 	Card []struct {
@@ -254,6 +256,22 @@ func (p Plugin) Exec() error {
 		}
 	}
 
+	if p.LocalTarballPath != "" {
+		return p.pushLocalTarball()
+	}
+
+	if p.Build.TarPath != "" {
+		tarDir := filepath.Dir(p.Build.TarPath)
+		if _, err := os.Stat(tarDir); os.IsNotExist(err) {
+			if mkdirErr := os.MkdirAll(tarDir, 0755); mkdirErr != nil {
+				return fmt.Errorf("failed to create directory for tar path %s: %v", tarDir, mkdirErr)
+			}
+		}
+		if saveCmd := commandSave(p.Build); saveCmd != nil {
+			cmds = append(cmds, saveCmd)
+		}
+	}
+
 	// execute all commands in batch mode.
 	for _, cmd := range cmds {
 		cmd.Stdout = os.Stdout
@@ -261,14 +279,20 @@ func (p Plugin) Exec() error {
 		trace(cmd)
 
 		err := cmd.Run()
-		if err != nil && isCommandPull(cmd.Args) {
-			fmt.Printf("Could not pull cache-from image %s. Ignoring...\n", cmd.Args[2])
-		} else if err != nil && isCommandPrune(cmd.Args) {
-			fmt.Printf("Could not prune system containers. Ignoring...\n")
-		} else if err != nil && isCommandRmi(cmd.Args) {
-			fmt.Printf("Could not remove image %s. Ignoring...\n", cmd.Args[2])
-		} else if err != nil {
-			return err
+		if err != nil {
+			switch {
+			case isCommandPull(cmd.Args):
+				fmt.Printf("Could not pull cache-from image %s. Ignoring...\n", cmd.Args[2])
+			case isCommandPrune(cmd.Args):
+				fmt.Printf("Could not prune system containers. Ignoring...\n")
+			case isCommandRmi(cmd.Args):
+				fmt.Printf("Could not remove image %s. Ignoring...\n", cmd.Args[2])
+			case isCommandSave(cmd.Args):
+				fmt.Printf("Could not save image to tarball %s: %v\n", p.Build.TarPath, err)
+				return err
+			default:
+				return err
+			}
 		}
 	}
 
@@ -389,14 +413,23 @@ func commandInfo() *exec.Cmd {
 
 // helper function to create the docker build command.
 func commandBuild(build Build) *exec.Cmd {
+	if build.Context == "" && build.Dockerfile == "" {
+		return nil
+	}
 	args := []string{
 		"build",
 		"--rm=true",
-		"-f", build.Dockerfile,
-		"-t", build.TempTag,
 	}
 
-	args = append(args, build.Context)
+	if build.Dockerfile != "" {
+		args = append(args, "-f", build.Dockerfile)
+	}
+
+	args = append(args, "-t", build.TempTag)
+
+	if build.Context != "" {
+		args = append(args, build.Context)
+	}
 	if build.Squash {
 		args = append(args, "--squash")
 	}
@@ -646,6 +679,10 @@ func commandRmi(tag string) *exec.Cmd {
 	return exec.Command(dockerExe, "rmi", tag)
 }
 
+func isCommandSave(args []string) bool {
+	return len(args) > 1 && args[1] == "save"
+}
+
 func writeSSHPrivateKey(key string) (path string, err error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -691,4 +728,91 @@ func getDigest(buildName string) (string, error) {
 		return parts[1], nil
 	}
 	return "", errors.New("unable to fetch digest")
+}
+
+func commandSave(build Build) *exec.Cmd {
+	if build.TarPath == "" {
+		return nil
+	}
+	args := []string{
+		"save",
+		"-o",
+		build.TarPath,
+	}
+	args = append(args, build.TempTag)
+	for _, tag := range build.Tags {
+		args = append(args, fmt.Sprintf("%s:%s", build.Repo, tag))
+	}
+	return exec.Command(dockerExe, args...)
+}
+
+func (p Plugin) pushLocalTarball() error {
+	if p.LocalTarballPath == "" {
+		return fmt.Errorf("local tarball path cannot be empty")
+	}
+
+	tarballPath, err := filepath.Abs(p.LocalTarballPath)
+	if err != nil {
+		return fmt.Errorf("error resolving tarball path: %v", err)
+	}
+
+	if _, err := os.Stat(tarballPath); os.IsNotExist(err) {
+		return fmt.Errorf("tarball file does not exist: %s", tarballPath)
+	}
+
+	// Verify the tarball can be loaded
+	loadCmd := exec.Command(dockerExe, "load", "-i", tarballPath)
+	loadOutput, loadErr := loadCmd.CombinedOutput()
+	if loadErr != nil {
+		return fmt.Errorf("error loading tarball: %v\nOutput: %s", loadErr, string(loadOutput))
+	}
+
+	// Parse the loaded image name from the load output
+	// Docker's load command typically outputs something like "Loaded image: imagename:tag"
+	var loadedImage string
+	outputStr := string(loadOutput)
+	if strings.Contains(outputStr, "Loaded image:") {
+		parts := strings.Split(outputStr, "Loaded image:")
+		if len(parts) > 1 {
+			loadedImage = strings.TrimSpace(parts[1])
+		}
+	}
+
+	// If we couldn't parse the image name, return an error
+	if loadedImage == "" {
+		return fmt.Errorf("could not determine loaded image name from tarball")
+	}
+
+	if p.Login.Password == "" && p.Login.AccessToken == "" {
+		return fmt.Errorf("no login credentials provided. Cannot push image")
+	}
+
+	if p.Build.Repo == "" {
+		return fmt.Errorf("repository name cannot be empty")
+	}
+
+	// Use the first tag or default to 'latest' if no tags are provided
+	tag := "latest"
+	if len(p.Build.Tags) > 0 {
+		tag = p.Build.Tags[0]
+	}
+
+	targetImage := fmt.Sprintf("%s:%s", p.Build.Repo, tag)
+
+	// Tag the loaded image with the target image name
+	tagCmd := exec.Command(dockerExe, "tag", loadedImage, targetImage)
+	if err := tagCmd.Run(); err != nil {
+		return fmt.Errorf("error tagging image: %v", err)
+	}
+
+	// Push the tagged image
+	pushCmd := exec.Command(dockerExe, "push", targetImage)
+	pushOutput, pushErr := pushCmd.CombinedOutput()
+	if pushErr != nil {
+		return fmt.Errorf("error pushing image: %v\nOutput: %s", pushErr, string(pushOutput))
+	}
+
+	fmt.Printf("Successfully pushed image: %s\n", targetImage)
+
+	return nil
 }

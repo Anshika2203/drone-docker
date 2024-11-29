@@ -319,6 +319,16 @@ func main() {
 			EnvVar: "PLUGIN_REGISTRY_TYPE",
 		},
 		cli.StringFlag{
+			Name:   "tar-path",
+			Usage:  "Set this flag to save the image as a tarball at path",
+			EnvVar: "PLUGIN_TAR_PATH",
+		},
+		cli.StringFlag{
+			Name:   "local-tarball-path",
+			Usage:  "Path to local tarball to push",
+			EnvVar: "PLUGIN_LOCAL_TARBALL_PATH",
+		},
+		cli.StringFlag{
 			Name:   "access-token",
 			Usage:  "access token",
 			EnvVar: "ACCESS_TOKEN",
@@ -378,6 +388,7 @@ func run(c *cli.Context) error {
 			Quiet:               c.Bool("quiet"),
 			Platform:            c.String("platform"),
 			SSHAgentKey:         c.String("ssh-agent-key"),
+			TarPath:             c.String("tar-path"),
 		},
 		Daemon: docker.Daemon{
 			Registry:      c.String("docker.registry"),
@@ -398,6 +409,7 @@ func run(c *cli.Context) error {
 		BaseImageRegistry: c.String("docker.baseimageregistry"),
 		BaseImageUsername: c.String("docker.baseimageusername"),
 		BaseImagePassword: c.String("docker.baseimagepassword"),
+		LocalTarballPath:  c.String("local-tar-path"),
 	}
 
 	if c.Bool("tags.auto") {

@@ -179,3 +179,52 @@ func TestCommandBuild(t *testing.T) {
 		})
 	}
 }
+
+func TestTarPathFlag(t *testing.T) {
+	testCases := []struct {
+		name          string
+		tarPath       string
+		expectSaveCmd bool
+	}{
+		{
+			name:          "TarPath Not Set",
+			tarPath:       "",
+			expectSaveCmd: false,
+		},
+		{
+			name:          "TarPath Set",
+			tarPath:       "/tmp/test-image.tar",
+			expectSaveCmd: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			build := Build{
+				Repo:    "testuser/test-image",
+				Tags:    []string{"latest"},
+				TempTag: "test-image:latest",
+				TarPath: tc.tarPath,
+			}
+
+			saveCmd := commandSave(build)
+
+			if tc.expectSaveCmd {
+				if saveCmd == nil {
+					t.Errorf("Expected save command, but none was generated")
+				} else {
+					if saveCmd.Args[0] != dockerExe || saveCmd.Args[1] != "save" {
+						t.Errorf("Incorrect save command: got %v", saveCmd.Args)
+					}
+					if saveCmd.Args[3] != tc.tarPath {
+						t.Errorf("Incorrect tar path: want %s, got %s", tc.tarPath, saveCmd.Args[3])
+					}
+				}
+			} else {
+				if saveCmd != nil {
+					t.Errorf("Did not expect save command, but one was generated")
+				}
+			}
+		})
+	}
+}
